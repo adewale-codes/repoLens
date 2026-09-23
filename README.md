@@ -7,8 +7,9 @@ Phase 1 covers **Python** and **JavaScript/TypeScript**. Both are chunked along
 real syntax boundaries (functions, classes, methods), not fixed line windows.
 
 ```
-POST /ingest {"repo_url": "https://github.com/pallets/click"}
-  fetch (shallow clone) -> filter -> parse/chunk -> import graph -> embed -> store
+POST /ingest {"repo_url": "https://github.com/pallets/click"}   -> 202 {"job_id": ...}
+  background job: fetch (shallow clone) -> filter -> parse/chunk -> import graph -> embed -> store
+GET /ingest/{job_id}   -> queued | fetching | parsing | embedding (n/total chunks) | storing | complete | failed
 
 POST /ask {"repo_id": "pallets/click", "question": "..."}
   embed question -> vector search + identifier boost -> expand via import graph
@@ -37,7 +38,8 @@ interpreter uses the system runtime and works.
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/ingest` | Index a repo. Returns chunk counts by kind and language, skipped-file reasons, parse errors, graph stats, and timings. |
+| POST | `/ingest` | Queue an ingest (or a re-ingest, to pick up new commits). Returns `202` with a `job_id` right away. Returns `409` with the existing `job_id` if that repo already has a job in flight, and `422` for a URL that isn't a GitHub repo. |
+| GET | `/ingest/{job_id}` | Job status: current stage, embedding progress (`chunks_embedded`/`chunks_total`), timestamps, `error` if it failed, and once complete, the ingest report (chunk counts by kind and language, skipped-file reasons, parse errors, graph stats, timings). |
 | POST | `/ask` | Answer a question. Returns the answer, each citation with a `valid` flag, the chunks used (with why each was retrieved), and `files_consulted`. |
 | GET | `/repos` | List indexed repos. |
 | GET | `/repos/{owner}/{name}/graph?file=...` | Import edges, optionally for one file. |
@@ -120,17 +122,46 @@ Every returned chunk says why it was retrieved.
   with its real line number, so citations are copied rather than guessed.
 - The system prompt tells Claude to use only the excerpts and to say so when
   they don't contain the answer.
+- The prompt tells Claude to cite each excerpt by its own lines, never one
+  range spanning several excerpts, and not to cite irrelevant excerpts when
+  reporting that something isn't there. Both were real sources of bad
+  citations in testing.
 - After the call, every `file:line` citation is checked against the lines
-  Claude was actually shown, and returned with `valid: true/false`.
+  Claude was actually shown. Each is returned with `valid` and a `basis`:
+  - `"excerpt"`: all code in the range was shown. Blank lines between
+    excerpts don't count against a citation.
+  - `"class_index"`: an exact member location from a split class's index,
+    real but not read.
+  - `null`: invalid. An invalid citation is also marked `[unverified]` inline
+    in the answer, with a caveat, so the reader never sees an unchecked
+    citation that looks like a checked one.
 - The model is `claude-opus-5` with adaptive thinking. Server-side refusal
   fallback (`fallbacks: "default"`) is enabled, so a safety-classifier decline
   is retried on Anthropic's recommended fallback model instead of coming back
   empty.
 
-**`/ingest` is synchronous.** Fetch and parse take seconds, but CPU
-embedding runs at roughly 0.3–0.7 s per chunk, so the repos below took 7–15
-minutes. Phase 2 should return a job id and run the pipeline in a worker. The
-embedding cost is also the strongest argument for a hosted embedding model.
+**`/ingest` runs as a background job (Phase 2).** Fetch and parse take
+seconds, but CPU embedding runs at roughly 0.3–0.7 s per chunk, so the repos
+below took 7–15 minutes, far past any HTTP timeout. `POST /ingest` records a
+job in the same SQLite database and returns `202`. A single daemon worker
+thread runs jobs from an in-process FIFO queue and writes each stage to the
+job row as it starts. Clients poll `GET /ingest/{job_id}`. The pipeline itself
+is unchanged; it only reports its stage through an optional callback. Why this
+design (full reasoning in `services/jobs.py`):
+
+- **A thread, not asyncio:** the pipeline is synchronous, CPU-bound code, so
+  asyncio would just wrap a thread anyway.
+- **One worker:** embedding already saturates every core, so parallel ingests
+  would each run at half speed with double the memory.
+- **A daemon thread, not an executor:** a `ThreadPoolExecutor` would block
+  server shutdown until the current embed finished.
+- **No Celery/Redis:** they buy durability across restarts and machines at the
+  cost of running a broker.
+
+The trade-off is that queued and running jobs don't survive a restart. At
+startup they're marked `failed` ("Interrupted … submit again"), so no client
+polls a job that will never finish. The embedding cost is also the strongest
+argument for a hosted embedding model.
 
 ## Phase 1 acceptance results
 
@@ -170,7 +201,9 @@ and `sindresorhus/ky` (TS).
 
 ## Known gaps / Phase 2+
 
-- Async ingestion with job polling.
+- Jobs are in-process: they don't survive a restart (they're marked failed)
+  and can't be spread across machines. A broker-backed queue would fix both
+  if that's ever needed.
 - tsconfig `paths` aliases (`@/x`) and Python namespace-package edge cases in
   the graph.
 - Incremental re-ingest: currently every ingest re-clones and re-embeds

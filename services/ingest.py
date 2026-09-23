@@ -2,6 +2,7 @@
 
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -31,12 +32,24 @@ class IngestReport:
     timings_s: dict
 
 
-def ingest(repo_url: str) -> IngestReport:
+# Called with a stage name ("fetching", "parsing", "embedding", "storing") and
+# optional progress details, so a caller such as a background job can report
+# where the pipeline is. It only observes; it never changes what the pipeline does.
+ProgressCallback = Callable[[str, dict | None], None]
+
+
+def _no_progress(stage: str, detail: dict | None = None) -> None:
+    pass
+
+
+def ingest(repo_url: str, on_progress: ProgressCallback = _no_progress) -> IngestReport:
     timings = {}
+    on_progress("fetching", None)
     t = time.perf_counter()
     fetched = fetch_repo(repo_url, settings.repos_dir)
     timings["fetch"] = time.perf_counter() - t
 
+    on_progress("parsing", {"repo_id": fetched.repo_id, "commit": fetched.commit})
     t = time.perf_counter()
     filtered = filter_repo(fetched.root)
     chunks: list[Chunk] = []
@@ -58,10 +71,14 @@ def ingest(repo_url: str) -> IngestReport:
     edges, graph_stats = build_graph(imports)
     timings["graph"] = time.perf_counter() - t
 
+    on_progress("embedding", {"chunks_embedded": 0, "chunks_total": len(chunks)})
     t = time.perf_counter()
     embedder = get_embedder()
     vectors = (
-        embedder.embed_documents([chunk_embedding_text(c) for c in chunks])
+        embedder.embed_documents(
+            [chunk_embedding_text(c) for c in chunks],
+            on_batch=lambda done: on_progress("embedding", {"chunks_embedded": done, "chunks_total": len(chunks)}),
+        )
         if chunks else np.zeros((0, 0), dtype=np.float32)
     )
     timings["embed"] = time.perf_counter() - t
@@ -80,6 +97,7 @@ def ingest(repo_url: str) -> IngestReport:
         timings_s={k: round(v, 2) for k, v in timings.items()},
     )
 
+    on_progress("storing", None)
     t = time.perf_counter()
     stats = {k: v for k, v in report.__dict__.items() if k not in ("repo_id", "commit", "embed_model")}
     store.replace_repo(fetched.repo_id, fetched.url, fetched.commit, embedder.model_name, chunks, vectors, edges, stats)

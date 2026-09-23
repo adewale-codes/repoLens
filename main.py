@@ -1,14 +1,13 @@
 """RepoLens API.
 
-POST /ingest is synchronous: it returns once the repo is fully indexed. Fetch
-and parse take seconds; CPU embedding dominates at roughly 0.3-0.7 s per chunk
-(7-15 minutes for the 450-1300-chunk repos tested). Phase 2 should make it
-return a job id right away and run the pipeline in a worker (GET /jobs/{id} to
-poll), since that already exceeds typical HTTP client and proxy timeouts.
+POST /ingest queues a background job and returns 202 with its id right away.
+Poll GET /ingest/{job_id} for its stage and, once complete, its report. An
+ingest takes 7-15 minutes on CPU, mostly embedding, far beyond an HTTP
+timeout. See services/jobs.py for how jobs run.
 """
 
-import threading
-from collections import defaultdict
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
@@ -18,17 +17,23 @@ import anthropic  # noqa: E402
 from fastapi import FastAPI, HTTPException  # noqa: E402
 
 from schemas import (  # noqa: E402
-    AskRequest, AskResponse, ChunkOut, CitationOut, GraphEdgeOut, GraphResponse, IngestRequest,
+    AskRequest, AskResponse, ChunkOut, CitationOut, GraphEdgeOut, GraphResponse, IngestAccepted, IngestJob,
+    IngestRequest,
 )
-from services import store  # noqa: E402
+from services import jobs, store  # noqa: E402
 from services.answer import MissingCredentials, answer_question  # noqa: E402
 from services.fetch import FetchError, parse_github_url  # noqa: E402
-from services.ingest import IngestReport, ingest  # noqa: E402
 from services.retrieve import retrieve  # noqa: E402
 
-app = FastAPI(title="RepoLens", version="0.1.0")
 
-_ingest_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Jobs left queued or running by a previous process can never finish now.
+    jobs.recover_interrupted_jobs()
+    yield
+
+
+app = FastAPI(title="RepoLens", version="0.2.0", lifespan=lifespan)
 
 
 def _normalize_repo_id(value: str) -> str:
@@ -51,21 +56,42 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/ingest")
-def ingest_repo(body: IngestRequest) -> IngestReport:
+def _iso(ts: float | None) -> str | None:
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts is not None else None
+
+
+@app.post("/ingest", status_code=202)
+def ingest_repo(body: IngestRequest) -> IngestAccepted:
+    """Queue an ingest (or a re-ingest, to pick up new commits) and return at once."""
     try:
-        owner, name = parse_github_url(body.repo_url)
-    except FetchError as e:
+        job_id = jobs.submit(body.repo_url)
+    except FetchError as e:  # malformed URL: nothing to queue
         raise HTTPException(422, str(e)) from e
-    lock = _ingest_locks[f"{owner}/{name}"]
-    if not lock.acquire(blocking=False):
-        raise HTTPException(409, f"{owner}/{name} is already being ingested.")
-    try:
-        return ingest(body.repo_url)
-    except FetchError as e:
-        raise HTTPException(400, str(e)) from e
-    finally:
-        lock.release()
+    except jobs.JobConflict as e:
+        raise HTTPException(
+            409, {"message": "This repo already has an ingest queued or running.", "job_id": e.job_id}
+        ) from e
+    return IngestAccepted(job_id=job_id, status="queued", status_url=f"/ingest/{job_id}")
+
+
+@app.get("/ingest/{job_id}")
+def ingest_status(job_id: str) -> IngestJob:
+    job = store.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, f"No ingest job {job_id!r}.")
+    return IngestJob(
+        job_id=job["id"],
+        repo_url=job["repo_url"],
+        repo_id=job["repo_id"],
+        status=job["status"],
+        created_at=_iso(job["created_at"]),
+        started_at=_iso(job["started_at"]),
+        completed_at=_iso(job["completed_at"]),
+        updated_at=_iso(job["updated_at"]),
+        progress=job["progress"],
+        error=job["error"],
+        result=job["result"],
+    )
 
 
 @app.post("/ask")
@@ -74,7 +100,7 @@ def ask(body: AskRequest) -> AskResponse:
     index = _index_or_404(repo_id)
     retrieval = retrieve(index, body.question)
     try:
-        result = answer_question(repo_id, index.commit, body.question, retrieval)
+        result = answer_question(index, body.question, retrieval)
     except (MissingCredentials, anthropic.AuthenticationError) as e:
         raise HTTPException(503, "Claude API credentials are missing or invalid. Set ANTHROPIC_API_KEY (e.g. in .env).") from e
     except anthropic.RateLimitError as e:

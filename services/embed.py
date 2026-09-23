@@ -13,6 +13,7 @@ vectors from different models aren't comparable. The store records which model
 built each repo's index.
 """
 
+from collections.abc import Callable
 from functools import lru_cache
 
 import numpy as np
@@ -44,12 +45,19 @@ class Embedder:
         self.model_name = model_name
         self._model = TextEmbedding(model_name=model_name, cache_dir=str(settings.data_dir / "models"))
 
-    def embed_documents(self, texts: list[str]) -> np.ndarray:
+    def embed_documents(self, texts: list[str], on_batch: Callable[[int], None] | None = None) -> np.ndarray:
+        """Embed texts in order. `on_batch`, if given, is called with the running
+        count after each batch so callers can report progress."""
         # Each batch is padded to its longest text, and attention cost grows
         # with length, so one long chunk makes the whole batch expensive. Sorting
         # by length keeps batches uniform; the original order is restored after.
         order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
-        embedded = np.array(list(self._model.embed([texts[i] for i in order], batch_size=BATCH_SIZE)), dtype=np.float32)
+        rows = []
+        for vector in self._model.embed([texts[i] for i in order], batch_size=BATCH_SIZE):
+            rows.append(vector)
+            if on_batch and (len(rows) % BATCH_SIZE == 0 or len(rows) == len(texts)):
+                on_batch(len(rows))
+        embedded = np.array(rows, dtype=np.float32)
         vectors = np.empty_like(embedded)
         vectors[order] = embedded
         return _normalize(vectors)

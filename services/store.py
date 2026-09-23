@@ -12,6 +12,9 @@ memory: every queried repo's matrix stays resident. Past ~100k chunks per repo,
 or with many repos queried concurrently, move to pgvector with an HNSW index.
 Only this module needs to change; the rest of the code talks to it through
 `replace_repo` / `load_index` / `get_repo`.
+
+The same database also holds ingest job records (`jobs` table, see
+services/jobs.py).
 """
 
 import json
@@ -60,6 +63,20 @@ CREATE TABLE IF NOT EXISTS edges (
     line    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS edges_repo ON edges (repo_id);
+CREATE TABLE IF NOT EXISTS jobs (
+    id           TEXT PRIMARY KEY,
+    repo_url     TEXT NOT NULL,
+    repo_id      TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    created_at   REAL NOT NULL,
+    updated_at   REAL NOT NULL,
+    started_at   REAL,
+    completed_at REAL,
+    progress     TEXT,
+    error        TEXT,
+    result       TEXT
+);
+CREATE INDEX IF NOT EXISTS jobs_repo ON jobs (repo_id, status);
 """
 
 
@@ -186,3 +203,66 @@ def load_index(repo_id: str) -> RepoIndex | None:
     with _cache_lock:
         _cache[repo_id] = index
     return index
+
+
+# --- Ingest jobs ---------------------------------------------------------------
+
+JOB_TERMINAL = ("complete", "failed")
+_JOB_JSON = ("progress", "result")
+_JOB_COLUMNS = (
+    "id", "repo_url", "repo_id", "status", "created_at", "updated_at",
+    "started_at", "completed_at", "progress", "error", "result",
+)
+
+
+def create_job(job_id: str, repo_url: str, repo_id: str) -> None:
+    now = time.time()
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO jobs (id, repo_url, repo_id, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)",
+            (job_id, repo_url, repo_id, now, now),
+        )
+
+
+def update_job(job_id: str, **fields) -> None:
+    """Set any job columns; `progress` and `result` are stored as JSON."""
+    fields["updated_at"] = time.time()
+    for key in _JOB_JSON:
+        if key in fields and fields[key] is not None:
+            fields[key] = json.dumps(fields[key])
+    assignments = ", ".join(f"{key} = ?" for key in fields)
+    with _connect() as conn:
+        conn.execute(f"UPDATE jobs SET {assignments} WHERE id = ?", (*fields.values(), job_id))
+
+
+def get_job(job_id: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(f"SELECT {', '.join(_JOB_COLUMNS)} FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        return None
+    job = dict(zip(_JOB_COLUMNS, row))
+    for key in _JOB_JSON:
+        job[key] = json.loads(job[key]) if job[key] else None
+    return job
+
+
+def active_job_for_repo(repo_id: str) -> str | None:
+    """The id of a queued or running job for this repo, if there is one."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM jobs WHERE repo_id = ? AND status NOT IN (?, ?) ORDER BY created_at LIMIT 1",
+            (repo_id, *JOB_TERMINAL),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def fail_unfinished_jobs(reason: str) -> int:
+    """Mark every job that isn't complete or failed as failed. Returns how many."""
+    now = time.time()
+    with _connect() as conn:
+        cursor = conn.execute(
+            "UPDATE jobs SET status = 'failed', error = ?, completed_at = ?, updated_at = ? "
+            "WHERE status NOT IN (?, ?)",
+            (reason, now, now, *JOB_TERMINAL),
+        )
+        return cursor.rowcount
