@@ -1,5 +1,6 @@
 """Runtime settings, read from environment variables or a local .env file."""
 
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -38,3 +39,21 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def storage_status() -> dict:
+    """Where persistent data lives, and whether it's on a Railway volume.
+
+    data_dir holds the real product data (the SQLite index of chunks,
+    embeddings, and import graphs, plus ingest jobs), not a cache. On Railway,
+    anything outside a Volume is wiped on every redeploy. RAILWAY_SERVICE_ID is
+    always set on Railway; RAILWAY_VOLUME_MOUNT_PATH only when a Volume is
+    attached.
+    """
+    data_dir = settings.data_dir.resolve()
+    on_railway = "RAILWAY_SERVICE_ID" in os.environ
+    mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH")
+    on_volume = None  # not applicable off Railway
+    if on_railway:
+        on_volume = mount is not None and data_dir.is_relative_to(Path(mount).resolve())
+    return {"data_dir": str(data_dir), "on_railway": on_railway, "volume_mount": mount, "persistent": on_volume}

@@ -1,0 +1,28 @@
+# The build context is the repo root. Only requirements.txt, the four
+# top-level modules, and services/ are COPYed into the image, but without this
+# file Docker still sends the whole context to the daemon first, including
+# data/ (the local SQLite index, repo clones, and ~640 MB embedding model) and
+# web/node_modules.
+
+# Persistent data comes from the Railway Volume at runtime; never bake it in.
+data/
+
+.git/
+.gitignore
+.env
+.env.*
+!.env.example
+
+.venv/
+venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+
+# The Next.js site is a separate service with its own build.
+web/
+
+tests/
+scratchpad/
+acceptance-output.txt
+*.md

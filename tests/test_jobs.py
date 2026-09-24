@@ -145,3 +145,20 @@ def test_http_flow_returns_202_then_polls_to_complete(monkeypatch):
 
         assert client.post("/ingest", json={"repo_url": "not a url"}).status_code == 422
         assert client.get("/ingest/does-not-exist").status_code == 404
+
+
+def test_health_reports_whether_data_is_on_a_railway_volume(tmp_path, monkeypatch):
+    import main
+    from config import storage_status
+
+    monkeypatch.delenv("RAILWAY_SERVICE_ID", raising=False)
+    assert storage_status()["persistent"] is None  # local: not applicable
+
+    monkeypatch.setenv("RAILWAY_SERVICE_ID", "svc")
+    monkeypatch.delenv("RAILWAY_VOLUME_MOUNT_PATH", raising=False)
+    assert storage_status()["persistent"] is False  # Railway, no volume
+
+    monkeypatch.setenv("RAILWAY_VOLUME_MOUNT_PATH", str(tmp_path))
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["status"] == "ok" and body["storage"]["persistent"] is True

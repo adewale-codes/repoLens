@@ -70,6 +70,61 @@ npm run dev                  # or: npm run build && npm start
 
 Those handlers also apply per-IP rate limits: 10 questions per 10 minutes and 5 new ingests per hour. `/ask` spends Claude credits and an ingest occupies the single worker for minutes, so a public page needs some protection. The limits are in memory, so they're per instance and reset on restart.
 
+## Deploying the API to Railway
+
+Files: `backend.Dockerfile`, `railway.json`, `.dockerignore`, and `.env.example`, which lists every variable.
+
+**Why this deploy needs a Volume when the other two projects didn't.** Everything RepoLens knows lives in `REPOLENS_DATA_DIR`:
+
+- the SQLite index (every repo's chunks, embeddings and import graph, plus the ingest job table);
+- the repo clones;
+- the ~640 MB embedding model.
+
+That's the product's data, not a cache. Railway's container filesystem is wiped on every deploy. Without a Volume, each redeploy deletes every indexed repo, and each one costs up to ~15 minutes of embedding to rebuild.
+
+**Volumes can't be declared in `railway.json`.** Railway's config-as-code has no volume fields: its documented `build`/`deploy` keys cover builder, start command, health check, restart policy and so on, but not storage. Attaching the Volume is a dashboard step, in the same category as attaching Postgres was for PackageSafe and WhyDidThisFail. The image sets `REPOLENS_DATA_DIR=/data`, so mount the Volume at `/data`.
+
+**Safety net.** At startup the API checks whether it's on Railway (`RAILWAY_SERVICE_ID`) and whether a Volume is mounted (`RAILWAY_VOLUME_MOUNT_PATH`). If data isn't on the Volume, it logs a warning. `GET /health` returns `storage.persistent`: `true`, `false`, or `null` off Railway.
+
+### Manual steps in the Railway dashboard, in order
+
+1. **Create the service.** New Project → Deploy from GitHub repo → this repository. Leave *Root Directory* empty: the build context must be the repo root, and the Dockerfile's `COPY` paths assume it.
+2. **Confirm the builder.** In the service's Settings → Build, *Builder* must be **Dockerfile** and *Dockerfile Path* must be `backend.Dockerfile`. `railway.json` sets both, but on WhyDidThisFail Railway ignored that and auto-detected a different builder until it was set by hand here. If the first build log mentions Railpack/Nixpacks instead of your Dockerfile, set these two fields manually and redeploy.
+3. **Attach a Volume.** Press ⌘K / Ctrl+K and choose to create a Volume, or right-click the project canvas. Connect it to this service and set the **mount path to `/data`**. Use at least the Hobby plan: Trial/Free volumes are capped at 0.5 GB, less than the embedding model alone. Hobby allows 5 GB, which holds the model plus a good number of indexed repos.
+4. **Set variables** (service → Variables):
+   - `ANTHROPIC_API_KEY`: required for `/ask`.
+   - `REPOLENS_DATA_DIR=/data`: the image already defaults to this; set it explicitly so the config is visible and matches the mount path.
+   - Optional overrides are listed in `.env.example`. Don't set `PORT`; Railway provides it, and the start command expands it through `sh -c`.
+5. **Generate a public domain.** Settings → Networking → Generate Domain.
+6. **Verify.** Run `curl https://<your-domain>/health` and expect `"status": "ok"` and `"storage": {"persistent": true, "volume_mount": "/data", ...}`. If `persistent` is `false`, the Volume isn't mounted at `REPOLENS_DATA_DIR`; fix that before ingesting anything.
+7. **First run.** The first ingest (or first `/ask`) downloads the embedding model into `/data/models`, which adds a few minutes once. After that it's on the Volume and survives redeploys.
+
+### Testing the image locally
+
+```bash
+docker build -f backend.Dockerfile -t repolens-api .
+docker run --rm -d --name repolens -p 8000:8000 -v repolens-data:/data \
+  -e ANTHROPIC_API_KEY=... repolens-api
+curl http://127.0.0.1:8000/health
+
+# Proves git, tree-sitter, onnxruntime, and SQLite on a mounted volume work
+# inside the container: ingest a tiny real repo (11 chunks) and poll it.
+curl -X POST http://127.0.0.1:8000/ingest -H 'content-type: application/json' \
+  -d '{"repo_url": "https://github.com/sindresorhus/is-plain-obj"}'
+curl http://127.0.0.1:8000/ingest/<job_id>   # repeat until "status": "complete"
+
+# Persistence: restart the container on the same volume; the repo should still be listed.
+docker rm -f repolens && docker run --rm -d --name repolens -p 8000:8000 -v repolens-data:/data repolens-api
+curl http://127.0.0.1:8000/repos
+```
+
+### Operational notes
+
+- **Keep a single replica.** Railway doesn't allow replicas on a service with a Volume, and ingestion is a single worker by design (Phase 2).
+- **Redeploys have a little downtime** with a Volume attached. An ingest that's running during a redeploy is marked `failed` ("Interrupted…") on the next start. Resubmit it.
+- **Memory.** Embedding peaked around 1.5 GB of RAM locally. Give the service at least 2 GB.
+- **The website is a second Railway service** built from `web/`. Point its `REPOLENS_API_URL` at this service's URL, and set `SITE_URL` to its own public domain.
+
 ## Design decisions
 
 **Fetching: shallow `git clone --depth 1`, not the GitHub tree API.** A clone

@@ -6,6 +6,7 @@ ingest takes 7-15 minutes on CPU, mostly embedding, far beyond an HTTP
 timeout. See services/jobs.py for how jobs run.
 """
 
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -16,6 +17,7 @@ load_dotenv()  # before anything reads ANTHROPIC_API_KEY or REPOLENS_* settings
 import anthropic  # noqa: E402
 from fastapi import FastAPI, HTTPException  # noqa: E402
 
+from config import storage_status  # noqa: E402
 from schemas import (  # noqa: E402
     AskRequest, AskResponse, ChunkOut, CitationOut, GraphEdgeOut, GraphResponse, IngestAccepted, IngestJob,
     IngestRequest,
@@ -26,8 +28,20 @@ from services.fetch import FetchError, parse_github_url  # noqa: E402
 from services.retrieve import retrieve  # noqa: E402
 
 
+log = logging.getLogger("repolens")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    storage = storage_status()
+    if storage["persistent"] is False:
+        # Running on Railway without a Volume at REPOLENS_DATA_DIR: every
+        # indexed repo would be lost on the next redeploy.
+        log.warning(
+            "REPOLENS_DATA_DIR=%s is NOT on a Railway Volume (volume mount: %s). Indexed repos and "
+            "ingest jobs will be wiped on every redeploy. Attach a Volume mounted at %s.",
+            storage["data_dir"], storage["volume_mount"], storage["data_dir"],
+        )
     # Jobs left queued or running by a previous process can never finish now.
     jobs.recover_interrupted_jobs()
     yield
@@ -53,7 +67,9 @@ def _index_or_404(repo_id: str):
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok"}
+    # "storage.persistent" is false on Railway without a Volume: a quick
+    # post-deploy check that indexed repos will survive the next redeploy.
+    return {"status": "ok", "storage": storage_status()}
 
 
 def _iso(ts: float | None) -> str | None:
