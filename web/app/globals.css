@@ -1,0 +1,127 @@
+@import "tailwindcss";
+
+/*
+ * RepoLens palette: light theme, warm neutrals with a teal accent. It's a
+ * separate identity from PackageSafe / WhyDidThisFail (indigo on slate), with
+ * the same token structure.
+ */
+:root {
+  --background: #fbfaf7;
+  --surface: #ffffff;
+  --surface-2: #f4f2ed;
+  --foreground: #1c1a17;
+  --muted: #66615a;
+  --subtle: #8d877e;
+  --border: #e6e2da;
+  --border-strong: #d3cec4;
+
+  --brand: #0e7c6b;
+  --brand-hover: #0a6457;
+  --brand-soft: #e7f4f1;
+  --brand-border: #b3dbd3;
+
+  /* Answer states */
+  --notfound-bg: #fff8eb;
+  --notfound-border: #f5d48a;
+  --notfound-text: #8a4b08;
+  --partial-bg: #eef7fc;
+  --partial-border: #b9dcf0;
+  --partial-text: #0b5a82;
+  --danger-bg: #fdf1f0;
+  --danger-border: #f4c7c3;
+  --danger-text: #a3261b;
+
+  --code-bg: #f4f2ed;
+
+  /* Dependency graph: the first three categorical slots, validated all-pairs
+     on #ffffff (dataviz validator: CVD dE 9.2, normal-vision 24.0). Further
+     groups fold into the neutral "other". */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-other: #a8a29e;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-border: var(--brand-border);
+  --color-notfound-bg: var(--notfound-bg);
+  --color-notfound-border: var(--notfound-border);
+  --color-notfound-text: var(--notfound-text);
+  --color-partial-bg: var(--partial-bg);
+  --color-partial-border: var(--partial-border);
+  --color-partial-text: var(--partial-text);
+  --color-danger-bg: var(--danger-bg);
+  --color-danger-border: var(--danger-border);
+  --color-danger-text: var(--danger-text);
+  --color-code-bg: var(--code-bg);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* Rendered answers (markdown from the model). */
+.prose-answer {
+  font-size: 0.95rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.prose-answer > * + * {
+  margin-top: 0.85em;
+}
+.prose-answer h1,
+.prose-answer h2,
+.prose-answer h3,
+.prose-answer h4 {
+  font-weight: 600;
+  line-height: 1.35;
+  margin-top: 1.4em;
+}
+.prose-answer h1 { font-size: 1.2rem; }
+.prose-answer h2 { font-size: 1.1rem; }
+.prose-answer h3, .prose-answer h4 { font-size: 1rem; }
+.prose-answer > :first-child { margin-top: 0; }
+.prose-answer ul { list-style: disc; padding-left: 1.4em; }
+.prose-answer ol { list-style: decimal; padding-left: 1.4em; }
+.prose-answer li + li { margin-top: 0.3em; }
+.prose-answer strong { font-weight: 600; }
+.prose-answer code {
+  font-family: var(--font-geist-mono);
+  font-size: 0.85em;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.05em 0.35em;
+}
+.prose-answer pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.85em 1em;
+  overflow-x: auto;
+  font-size: 0.85em;
+  line-height: 1.55;
+}
+.prose-answer pre code { background: none; border: 0; padding: 0; font-size: 1em; }
+.prose-answer blockquote {
+  border-left: 3px solid var(--border-strong);
+  padding-left: 1em;
+  color: var(--muted);
+}
+.prose-answer table { border-collapse: collapse; font-size: 0.9em; }
+.prose-answer th, .prose-answer td { border: 1px solid var(--border); padding: 0.35em 0.6em; text-align: left; }
+.prose-answer a { color: var(--brand); text-decoration: underline; text-underline-offset: 2px; }

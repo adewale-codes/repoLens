@@ -40,10 +40,35 @@ interpreter uses the system runtime and works.
 |---|---|---|
 | POST | `/ingest` | Queue an ingest (or a re-ingest, to pick up new commits). Returns `202` with a `job_id` right away. Returns `409` with the existing `job_id` if that repo already has a job in flight, and `422` for a URL that isn't a GitHub repo. |
 | GET | `/ingest/{job_id}` | Job status: current stage, embedding progress (`chunks_embedded`/`chunks_total`), timestamps, `error` if it failed, and once complete, the ingest report (chunk counts by kind and language, skipped-file reasons, parse errors, graph stats, timings). |
-| POST | `/ask` | Answer a question. Returns the answer, each citation with a `valid` flag, the chunks used (with why each was retrieved), and `files_consulted`. |
+| POST | `/ask` | Answer a question. Returns the answer, an `answer_status` (`answered` / `partial` / `not_found` / `refused`), each citation with a `valid` flag, the chunks used (with why each was retrieved), and `files_consulted`. |
 | GET | `/repos` | List indexed repos. |
+| GET | `/repos/{owner}/{name}` | One indexed repo: commit, embedding model, ingest stats. Case-insensitive; returns the canonical `repo_id`. |
 | GET | `/repos/{owner}/{name}/graph?file=...` | Import edges, optionally for one file. |
 | GET | `/repos/{owner}/{name}/chunks?file=...&include_text=true` | Chunk boundaries, for spot checks. |
+
+## Website (`web/`, Phase 3)
+
+A Next.js 16 (App Router) site on top of the API:
+
+- **`/`** — paste a GitHub URL. If the repo is already indexed it opens straight away. Otherwise an ingest job starts, and the page shows its real stage (fetching, parsing, embedding with a chunk count, storing), the elapsed time, and a typical range. The job id goes in the URL (`/?job=…`), so a refresh keeps following it. The examples (click, express, ky) open instantly.
+- **`/{owner}/{repo}`** — server-rendered, one shareable page per indexed repo:
+  - an ask box (answers render with citations linked to the exact lines on GitHub at the indexed commit, and "not found" and "partial" answers get distinct banners);
+  - an architecture overview;
+  - the import graph (d3-force, colored by directory, with tests and examples hidden by default) plus a table of every edge;
+  - copy / X / LinkedIn share buttons, and a generated OG image with the repo's stats.
+
+  A repo that was never indexed returns a real 404 with an "Index it" button; mixed-case paths 308-redirect to the canonical one.
+
+```bash
+cd web
+npm install
+cp .env.example .env.local   # REPOLENS_API_URL (server-only), SITE_URL for absolute share/OG links
+npm run dev                  # or: npm run build && npm start
+```
+
+`REPOLENS_API_URL` is read only on the server, never exposed as `NEXT_PUBLIC_`, the same convention as `WHYFAIL_API_URL` and `PACKAGESAFE_API_URL`. The browser only talks to the site's own `/api/*` route handlers, which proxy to the API.
+
+Those handlers also apply per-IP rate limits: 10 questions per 10 minutes and 5 new ingests per hour. `/ask` spends Claude credits and an ingest occupies the single worker for minutes, so a public page needs some protection. The limits are in memory, so they're per instance and reset on restart.
 
 ## Design decisions
 
@@ -204,6 +229,11 @@ and `sindresorhus/ky` (TS).
 - Jobs are in-process: they don't survive a restart (they're marked failed)
   and can't be spread across machines. A broker-backed queue would fix both
   if that's ever needed.
+- No size cap on submitted repos: anyone can queue a very large repo, and it
+  would hold the single worker for hours. A pre-clone size check (GitHub API
+  `size`) or a chunk-count limit would fix this.
+- Bare line ranges in answers (e.g. "`360-380`" after a cited file) aren't
+  linked or verified; only `file:line` citations are.
 - tsconfig `paths` aliases (`@/x`) and Python namespace-package edge cases in
   the graph.
 - Incremental re-ingest: currently every ingest re-clones and re-embeds

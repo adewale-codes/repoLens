@@ -123,3 +123,30 @@ def test_answer_question_end_to_end_with_stubbed_client(monkeypatch):
     assert [(c.start, c.end, c.basis) for c in result.citations] == [(4, 12, "excerpt"), (4, 17, None)]
     assert "examples/naval.py:4-17 [unverified]" in result.text
     assert "examples/naval.py:4-12 [unverified]" not in result.text
+
+
+def test_status_line_is_parsed_and_stripped():
+    from services.answer import split_status
+
+    assert split_status("Nope.\n\nFiles consulted: a.py\nAnswer status: not_found") == (
+        "Nope.\n\nFiles consulted: a.py", "not_found")
+    assert split_status("Some of it.\n**Answer status: Partial**\n") == ("Some of it.", "partial")
+    assert split_status("Answered.\nAnswer status: answered.") == ("Answered.", "answered")
+    assert split_status("No status line.") == ("No status line.", None)
+    # Only a trailing status line counts, not one quoted mid-answer.
+    assert split_status("It says Answer status: answered here.\nMore text.")[1] is None
+
+
+def test_repo_lookup_is_case_insensitive_and_canonical(tmp_path, monkeypatch):
+    import numpy as np
+    from fastapi.testclient import TestClient
+
+    import main
+    from config import settings
+    from services import store
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    store.replace_repo("Pallets/Click", "u", "abc", "m", [], np.zeros((0, 4), np.float32), [], {"chunks": 0})
+    client = TestClient(main.app)
+    assert client.get("/repos/pallets/click").json()["repo_id"] == "Pallets/Click"
+    assert client.get("/repos/nobody/nothing").status_code == 404

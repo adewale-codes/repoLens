@@ -145,6 +145,7 @@ def run_question(repo: str, index, question: str, call_api: bool) -> None:
             f"   citations: {len(body['citations'])} ({from_index} exact locations from a class index), "
             f"pointing outside shown lines: {json.dumps(invalid)}"
         )
+        print(f"   answer_status: {body.get('answer_status')}")
         print(f"   model: {body['model']}, stop_reason: {body['stop_reason']}, usage: {body['usage']}")
     print()
 

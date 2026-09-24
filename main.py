@@ -130,6 +130,7 @@ def ask(body: AskRequest) -> AskResponse:
         commit=index.commit,
         question=body.question,
         answer=result.text,
+        answer_status=result.status,
         citations=[CitationOut(**c.__dict__) for c in result.citations],
         files_consulted=sorted({c.file for c in chunks}),
         chunks_used=chunks,
@@ -169,3 +170,16 @@ def repo_chunks(repo_id: str, file: str | None = None, include_text: bool = Fals
         for c in index.chunks
         if file is None or c.path == file
     ]
+
+
+@app.get("/repos/{repo_id:path}")
+def get_repo(repo_id: str) -> dict:
+    """One indexed repo: its commit, embedding model, and ingest report stats.
+
+    Case-insensitive, like GitHub; the response carries the canonical repo_id.
+    Declared after /graph and /chunks so those more specific paths match first.
+    """
+    repo = store.find_repo(_normalize_repo_id(repo_id))
+    if repo is None:
+        raise HTTPException(404, f"Repository {repo_id!r} has not been ingested.")
+    return repo

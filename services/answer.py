@@ -39,7 +39,24 @@ A partial answer that's clearly marked as partial is better than a \
 complete-sounding one that isn't supported.
 
 End with a line starting "Files consulted:" listing the files you actually \
-relied on."""
+relied on. After it, on a final line of its own, write exactly one of:
+Answer status: answered  (the excerpts answer the question)
+Answer status: partial  (the excerpts answer part of it, and some of what was asked is missing)
+Answer status: not_found  (the excerpts don't contain what was asked; use this even if you can't rule \
+out that it exists in files you weren't shown)"""
+
+_STATUS_LINE = re.compile(
+    r"\n?[ \t*_]*Answer status:[ \t*_]*(answered|partial|not_found)[ \t*_.]*\Z", re.IGNORECASE
+)
+
+
+def split_status(text: str) -> tuple[str, str | None]:
+    """Strip the trailing "Answer status: ..." line; return (text, status or None)."""
+    text = text.rstrip()
+    m = _STATUS_LINE.search(text)
+    if not m:
+        return text, None
+    return text[: m.start()].rstrip(), m[1].lower()
 
 _NOTE_RANGE = re.compile(r"L(\d+)-(\d+)")
 
@@ -83,6 +100,8 @@ class Answer:
     model: str | None
     stop_reason: str | None
     usage: dict | None
+    # answered | partial | not_found | refused, as stated by the model (None if it didn't)
+    status: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -219,7 +238,7 @@ def answer_question(index: RepoIndex, question: str, retrieval: Retrieval) -> An
     if not context:
         return Answer(
             "This repository has no indexed code to search, so there is nothing to answer from.",
-            [], [], None, None, None,
+            [], [], None, None, None, status="not_found",
         )
 
     user = (
@@ -250,8 +269,9 @@ def answer_question(index: RepoIndex, question: str, retrieval: Retrieval) -> An
     if response.stop_reason == "refusal":
         category = response.stop_details.category if response.stop_details else None
         text = f"The model declined to answer this question (refusal category: {category})."
+        status = "refused"
     else:
-        text = "".join(b.text for b in response.content if b.type == "text").strip()
+        text, status = split_status("".join(b.text for b in response.content if b.type == "text"))
         if response.stop_reason == "max_tokens":
             text += "\n\n[Answer truncated: hit the max_tokens limit.]"
 
@@ -269,4 +289,5 @@ def answer_question(index: RepoIndex, question: str, retrieval: Retrieval) -> An
         model=response.model,
         stop_reason=response.stop_reason,
         usage={"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens},
+        status=status,
     )

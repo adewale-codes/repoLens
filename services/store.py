@@ -173,6 +173,16 @@ def get_repo(repo_id: str) -> dict | None:
     return record
 
 
+def find_repo(repo_id: str) -> dict | None:
+    """Like get_repo, but case-insensitive, as GitHub owner/repo names are.
+
+    The returned record carries the canonical `repo_id`.
+    """
+    with _connect() as conn:
+        row = conn.execute("SELECT repo_id FROM repos WHERE repo_id = ? COLLATE NOCASE", (repo_id,)).fetchone()
+    return get_repo(row[0]) if row else None
+
+
 def list_repos() -> list[dict]:
     with _connect() as conn:
         ids = [r[0] for r in conn.execute("SELECT repo_id FROM repos ORDER BY repo_id")]

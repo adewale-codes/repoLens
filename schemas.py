@@ -59,6 +59,8 @@ class AskResponse(BaseModel):
     commit: str
     question: str
     answer: str
+    # "answered" | "partial" | "not_found" | "refused", as the model stated it; null if it didn't
+    answer_status: str | None
     citations: list[CitationOut]
     files_consulted: list[str]
     chunks_used: list[ChunkOut]
