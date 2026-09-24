@@ -9,6 +9,7 @@ import { directories, hubs, KIND_LABELS } from "@/lib/architecture";
 import { suggestedQuestions } from "@/lib/examples";
 import { blobUrl, isValidRepoPath, repoUrl } from "@/lib/github";
 import { languageNames, plural } from "@/lib/format";
+import { META_DESCRIPTION_MAX, repoDescription, SOCIAL_DESCRIPTION_MAX } from "@/lib/seo";
 import { getBaseUrl } from "@/lib/site";
 import type { Repo } from "@/lib/types";
 
@@ -22,24 +23,28 @@ function languages(repo: Repo): string {
   return languageNames(repo.stats.chunks_by_language);
 }
 
-function summary(repo: Repo): string {
-  const s = repo.stats;
-  return `${languages(repo)} · ${s.files_indexed} files · ${s.chunks.toLocaleString("en-US")} functions, classes & blocks · ${s.graph.edges ?? 0} internal imports`;
-}
-
 export async function generateMetadata(props: PageProps<"/[owner]/[repo]">): Promise<Metadata> {
   const { owner, repo: name } = await props.params;
   const repo = await loadRepo(owner, name);
   if (!repo) return { title: "Repository not indexed | RepoLens" };
 
   const title = `${repo.repo_id}: how it works | RepoLens`;
-  const description = `Ask ${repo.repo_id} anything and get answers grounded in its code, with line-level citations. ${summary(repo)}.`;
+  const description = repoDescription(repo, META_DESCRIPTION_MAX);
+  const socialDescription = repoDescription(repo, SOCIAL_DESCRIPTION_MAX);
   return {
     title,
     description,
     alternates: { canonical: `/${repo.repo_id}` },
-    openGraph: { title: `${repo.repo_id} on RepoLens`, description, type: "article", url: `/${repo.repo_id}` },
-    twitter: { card: "summary_large_image", title: `${repo.repo_id} on RepoLens`, description },
+    // siteName is repeated here because Next merges metadata shallowly: this
+    // openGraph object replaces the root layout's, including its siteName.
+    openGraph: {
+      siteName: "RepoLens",
+      title: `${repo.repo_id} on RepoLens`,
+      description: socialDescription,
+      type: "article",
+      url: `/${repo.repo_id}`,
+    },
+    twitter: { card: "summary_large_image", title: `${repo.repo_id} on RepoLens`, description: socialDescription },
   };
 }
 

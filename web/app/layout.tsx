@@ -12,10 +12,19 @@ const siteUrl = process.env.SITE_URL || "http://localhost:3000";
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: "RepoLens: ask any GitHub repo how it works",
+  // Within ~155 characters for search results. Social cards get a shorter
+  // one (~125), since mobile previews cut around there.
   description:
-    "Paste a GitHub repository and get answers about its code, grounded in the source with line-level citations, plus a map of how its files depend on each other.",
-  openGraph: { siteName: "RepoLens", type: "website" },
-  twitter: { card: "summary_large_image" },
+    "Paste a GitHub repo and get answers about its code, grounded in the source with line-level citations, plus a map of how its files depend on each other.",
+  openGraph: {
+    siteName: "RepoLens",
+    type: "website",
+    description: "Ask any GitHub repo how it works. Answers cite the exact lines, with a map of how its files depend on each other.",
+  },
+  twitter: {
+    card: "summary_large_image",
+    description: "Ask any GitHub repo how it works. Answers cite the exact lines, with a map of how its files depend on each other.",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

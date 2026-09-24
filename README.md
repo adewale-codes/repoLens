@@ -101,21 +101,23 @@ That's the product's data, not a cache. Railway's container filesystem is wiped 
 
 ### Testing the image locally
 
+Host port 8010 because PackageSafe's docker-compose backend also uses 8000. If `docker run` fails with "port is already allocated", pick another host port.
+
 ```bash
 docker build -f backend.Dockerfile -t repolens-api .
-docker run --rm -d --name repolens -p 8000:8000 -v repolens-data:/data \
+docker run --rm -d --name repolens -p 8010:8000 -v repolens-data:/data \
   -e ANTHROPIC_API_KEY=... repolens-api
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8010/health
 
 # Proves git, tree-sitter, onnxruntime, and SQLite on a mounted volume work
 # inside the container: ingest a tiny real repo (11 chunks) and poll it.
-curl -X POST http://127.0.0.1:8000/ingest -H 'content-type: application/json' \
+curl -X POST http://127.0.0.1:8010/ingest -H 'content-type: application/json' \
   -d '{"repo_url": "https://github.com/sindresorhus/is-plain-obj"}'
-curl http://127.0.0.1:8000/ingest/<job_id>   # repeat until "status": "complete"
+curl http://127.0.0.1:8010/ingest/<job_id>   # repeat until "status": "complete"
 
 # Persistence: restart the container on the same volume; the repo should still be listed.
-docker rm -f repolens && docker run --rm -d --name repolens -p 8000:8000 -v repolens-data:/data repolens-api
-curl http://127.0.0.1:8000/repos
+docker rm -f repolens && docker run --rm -d --name repolens -p 8010:8000 -v repolens-data:/data repolens-api
+curl http://127.0.0.1:8010/repos
 ```
 
 ### Operational notes

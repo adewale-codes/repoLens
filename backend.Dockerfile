@@ -12,8 +12,9 @@ FROM python:3.11-slim
 # resolves to a prebuilt manylinux wheel for CPython 3.11, with no source
 # builds, and the ELF dependencies of their native libraries are only glibc,
 # libstdc++, libgcc_s, and zlib, all present in python:3.11-slim. onnxruntime
-# in particular needs no libgomp. (Checked from the wheel files; see README
-# "Deploying the API to Railway" for the container run-test.)
+# in particular needs no libgomp. Verified in this image: onnxruntime loads,
+# tree-sitter parses, and a real ingest plus retrieval ran end to end (README
+# "Testing the image locally").
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
